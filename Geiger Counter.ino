@@ -1,3 +1,5 @@
+#include <ArduinoNATS.h>
+
 #include <WiFiNINA.h>
 #include <samd.h>
 
@@ -6,13 +8,21 @@
 int wifi_closest_rssi = -10; // Closest 
 int wifi_farthest_rssi = -90; // Farthest
 int rssi = wifi_farthest_rssi; // Wifi signal strengh variable
-float dist = 1000; // Really rough distance to wifi signal, in meters?
+
+const float dist_closest = 0;
+const float dist_farthest = 30;
+float dist = dist_farthest; // Really rough distance to wifi signal, in meters?
 
 ///////please enter your sensitive data in the Secret tab/arduino_secrets.h
 char ssid[] = SECRET_SSID;        // your network SSID (name)
 char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as key for WEP)
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
 int buzzerStatus = LOW;
+
+bool IsRadiationLeaking = true;
+
+WiFiClient client;
+NATS nats(&client, SECRET_NATS_SERVER, NATS_DEFAULT_PORT, "Arduino Leak Detector");
 
 void setup() {
 
@@ -31,6 +41,7 @@ void setup() {
     delay(5000);
   }
 
+  SetupNats();
 
   pinMode(3, OUTPUT);
   pinMode(5, OUTPUT);
@@ -45,9 +56,65 @@ void setup() {
 
 }
 
+void nats_msg_radiationLeekHandler(NATS::msg msg)
+{
+  Serial.print("Nats Msg Received: [Subj: "); Serial.print(msg.subject); Serial.print(", data: "); Serial.println(msg.data);
+  if (strcmp(msg.data, "true") == 0)
+  {
+    IsRadiationLeaking = true;
+  }
+  else if (strcmp(msg.data, "false") == 0)
+  {
+    IsRadiationLeaking = false;
+  }
+  else
+  {
+    Serial.println("Nats msg not recognized.");
+  }
+}
+void nats_on_connect()
+{
+  Serial.println("Nats connection complete!");
+  nats.subscribe("falcon.radiationleak.IsLeaking", nats_msg_radiationLeekHandler);
+}
+void nats_on_error()
+{
+  Serial.println("Nats error.");
+}
+void SetupNats()
+{
+  nats.on_connect = nats_on_connect;
+  nats.on_error = nats_on_error;
+  Serial.print("Connect to NATS - "); Serial.print(nats.hostname); Serial.print(":"); Serial.print(nats.port); Serial.print(" ---- ");
+  if (nats.connect())
+  {
+    Serial.println("Success!");
+  }
+  else
+  {
+    Serial.println("Failure. :(");
+  }
+  Serial.print("Nats Remote IP according to client: "); Serial.println(client.remoteIP());
+
+  if (nats.connected)
+  {
+    nats.process();
+  }
+}
+
 void loop() {
+  nats.process();
+
   rssi = WiFi.RSSI();
-  dist = rssiDist(rssi);
+  if (IsRadiationLeaking)
+  {
+    dist = rssiDist(rssi);
+  }
+  else
+  {
+    dist = dist_farthest * 2; // really far value, will cause gauge to show nothing and clicking to stop
+  }
+
   // if (Serial.peek() > -1){
   //   int value = Serial.read() - '0';
   //   if (value >= 0 && value <= 9)
@@ -90,13 +157,21 @@ void print_data() {
 
     Serial.print("Distance (m):");
     Serial.println(dist);
+
+    if (IsRadiationLeaking)
+    {
+      Serial.println("Radiation Leaking: true");
+    }
+    else
+    {
+      Serial.println("Radiation Leaking: false");
+    }
   }
 }
 
 void analog_out2() {
-  const float closest = 0;
-  const float farthest = 30;
   analogWriteResolution(8);
-  int percentVal = map(dist, closest, farthest, 0, 255);
+  int percentVal = map(dist, dist_farthest, dist_closest, 0, 255);
+  percentVal = constrain(percentVal, 0, 255);
   analogWrite(3, percentVal);
 }
